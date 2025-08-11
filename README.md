@@ -22,8 +22,8 @@ python bilateral_normal_integration_numpy.py --path data/Fig8_wallrelief/
 
 **u-direction:**
 
-![Integrated Normal Map](data/Fig8_wallrelief/wu_k_2.png)
+![u-d](data/Fig8_wallrelief/wu_k_2.png)
 
 **v-direction:**
 
-![Integrated Normal Map](data/Fig8_wallrelief/wv_k_2.png)
+![v-d](data/Fig8_wallrelief/wv_k_2.png)
