@@ -307,6 +307,10 @@ def bilateral_normal_integration(normal_map,
     # Reconstruct the depth map and surface
     depth_map = np.ones_like(normal_mask, float) * np.nan
     depth_map[normal_mask] = z
+    
+    # Save raw integrated depth in pixel units for evaluation
+    np.save(os.path.join(args.path if 'args' in globals() else arg.path, "z_pix.npy"), depth_map.astype(np.float32))
+
 
     if K is not None:  # perspective
         depth_map = np.exp(depth_map)
