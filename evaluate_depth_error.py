@@ -1,0 +1,166 @@
+# evaluate_depth_error.py
+import os
+import argparse
+import numpy as np
+import cv2
+
+MM_PER_GT_UNIT = 5000.0 / 65535.0   # GT 16-bit unit -> mm
+MM_PER_PIXEL   = 4000.0 / 512.0     # pixel unit -> mm
+
+def find_gt_path(root):
+    candidates = [
+        os.path.join(root, "ground_truth", "depth_map.png"),
+        os.path.join(root, "ground_truth", "depth.png"),
+        os.path.join(root, "depth.png"),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    raise FileNotFoundError(
+        "Ground-truth depth not found. Tried:\n" + "\n".join(candidates)
+    )
+
+def load_gt_mm(root):
+    gt_path = find_gt_path(root)
+    gt = cv2.imread(gt_path, cv2.IMREAD_UNCHANGED)
+    if gt is None:
+        raise FileNotFoundError(f"Unable to read GT image at {gt_path}")
+    if gt.dtype != np.uint16:
+        raise TypeError(f"GT must be 16-bit (uint16). Got {gt.dtype} at {gt_path}")
+    gt_mm = gt.astype(np.float32) * MM_PER_GT_UNIT
+    return gt_mm, gt_path
+
+def load_est_mm(root):
+    z_path = os.path.join(root, "z_pix.npy")
+    if not os.path.isfile(z_path):
+        raise FileNotFoundError(f"{z_path} not found. Run the integrator to produce z_pix.npy.")
+    z = np.load(z_path).astype(np.float32)
+    return z * MM_PER_PIXEL, z_path
+
+def load_mask(root, shape):
+    m = cv2.imread(os.path.join(root, "mask.png"), cv2.IMREAD_GRAYSCALE)
+    if m is None:
+        return np.ones(shape, dtype=bool)
+    if m.shape != shape:
+        raise ValueError(f"Mask shape {m.shape} does not match GT shape {shape}.")
+    return m > 0
+
+def maybe_flip_sign(est_mm, gt_mm, mask):
+    est_v = est_mm[mask]
+    gt_v  = gt_mm[mask]
+    corr = np.corrcoef(est_v, gt_v)[0, 1]
+    if np.isnan(corr):
+        return est_mm, False
+    return (-est_mm, True) if corr < 0 else (est_mm, False)
+
+def align_zero(est_mm, gt_mm, mask):
+    delta = (gt_mm - est_mm)[mask]
+    offset = float(np.median(delta))
+    return est_mm + offset, offset
+
+def norm01_for_viz(x, mask, p_lo=2, p_hi=98):
+    x = x.copy()
+    x[~mask] = np.nan
+    v = x[np.isfinite(x)]
+    if v.size == 0:
+        return np.zeros_like(x, dtype=np.uint8)
+    lo, hi = np.percentile(v, p_lo), np.percentile(v, p_hi)
+    if hi <= lo: hi = lo + 1e-6
+    y = (x - lo) / (hi - lo)
+    y = np.clip(np.nan_to_num(y, nan=0.0), 0, 1)
+    return (y * 255).astype(np.uint8)
+
+def save_artifacts(out_dir, gt_mm, est_mm_aligned, mask):
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Absolute error
+    abs_err = np.full_like(gt_mm, np.nan, dtype=np.float32)
+    abs_err[mask] = np.abs(est_mm_aligned - gt_mm)[mask]
+
+    # Error heatmap
+    valid = abs_err[np.isfinite(abs_err)]
+    scale = max(np.percentile(valid, 95), 1e-6) if valid.size > 0 else 1.0
+    vis = np.clip(np.nan_to_num(abs_err, nan=0.0) / scale, 0, 1)
+    err_u8 = (vis * 255).astype(np.uint8)
+    cv2.imwrite(os.path.join(out_dir, "error_mm_abs.png"), err_u8)
+
+    # Normalized GT and estimate
+    gt_u8  = norm01_for_viz(gt_mm, mask)
+    est_u8 = norm01_for_viz(est_mm_aligned, mask)
+    cv2.imwrite(os.path.join(out_dir, "gt_mm_norm.png"), gt_u8)
+    cv2.imwrite(os.path.join(out_dir, "est_mm_aligned_norm.png"), est_u8)
+
+    # Side-by-side
+    h = gt_u8.shape[0]
+    bar = np.full((h, 8), 255, np.uint8)
+    panel = np.hstack([gt_u8, bar, est_u8, bar, err_u8])
+    cv2.imwrite(os.path.join(out_dir, "compare_gt_est_err.png"), panel)
+
+    abs_err = np.full_like(gt_mm, np.nan, dtype=np.float32)
+    abs_err[mask] = np.abs(est_mm_aligned - gt_mm)[mask]
+
+    # Error heatmap
+    valid = abs_err[np.isfinite(abs_err)]
+    scale = max(np.percentile(valid, 95), 1e-6) if valid.size > 0 else 1.0
+    vis = np.clip(np.nan_to_num(abs_err, nan=0.0) / scale, 0, 1)
+    err_u8 = (vis * 255).astype(np.uint8)
+    cv2.imwrite(os.path.join(out_dir, "error_mm_abs.png"), err_u8)
+
+    # Side-by-side panel
+    gt_viz  = norm01_for_viz(gt_mm, mask)
+    est_viz = norm01_for_viz(est_mm_aligned, mask)
+    h = gt_viz.shape[0]
+    bar = np.full((h, 8), 255, np.uint8)
+    panel = np.hstack([gt_viz, bar, est_viz, bar, err_u8])
+    cv2.imwrite(os.path.join(out_dir, "compare_gt_est_err.png"), panel)
+
+def main():
+    ap = argparse.ArgumentParser(description="Evaluate integrated depth (z_pix.npy) against GT depth.png")
+    ap.add_argument("--path", "-p", required=True, help="Dataset folder, e.g. data/Fig8_wallrelief")
+    args = ap.parse_args()
+
+    # Output dir
+    out_dir = os.path.join(args.path, "eval_results")
+    os.makedirs(out_dir, exist_ok=True)
+
+    gt_mm, gt_path   = load_gt_mm(args.path)
+    est_mm, z_path   = load_est_mm(args.path)
+    if gt_mm.shape != est_mm.shape:
+        raise ValueError(f"Shape mismatch: GT {gt_mm.shape} vs est {est_mm.shape}")
+
+    mask = load_mask(args.path, gt_mm.shape)
+    valid = mask & np.isfinite(gt_mm) & np.isfinite(est_mm)
+
+    est_mm, flipped        = maybe_flip_sign(est_mm, gt_mm, valid)
+    est_mm_aligned, offset = align_zero(est_mm, gt_mm, valid)
+
+    diff    = (est_mm_aligned - gt_mm)[valid]
+    mae_mm  = float(np.mean(np.abs(diff)))
+    rmse_mm = float(np.sqrt(np.mean(diff**2)))
+    mae_px  = mae_mm / MM_PER_PIXEL
+    rmse_px = rmse_mm / MM_PER_PIXEL
+
+    print("=== Evaluation (GT vs Integrated Depth) ===")
+    print(f"GT path              : {gt_path}")
+    print(f"Estimate path        : {z_path}")
+    print(f"GT unit -> mm        : {MM_PER_GT_UNIT:.9f} mm / GT-unit")
+    print(f"Pixel -> mm          : {MM_PER_PIXEL:.9f} mm / pixel")
+    print(f"Sign flipped         : {flipped}")
+    print(f"Applied zero offset  : {offset:.6f} mm")
+    print(f"MAE                  : {mae_mm:.6f} mm   ({mae_px:.6f} px)")
+    print(f"RMSE                 : {rmse_mm:.6f} mm  ({rmse_px:.6f} px)")
+    print(f"Valid pixels         : {int(valid.sum())} / {gt_mm.size}")
+
+    # Save images
+    save_artifacts(out_dir, gt_mm, est_mm_aligned, valid)
+
+    # Save CSV metrics
+    csv_path = os.path.join(out_dir, "depth_eval_metrics.csv")
+    with open(csv_path, "w") as f:
+        f.write("gt_path,z_path,mm_per_gt_unit,mm_per_pixel,flipped,offset_mm,mae_mm,rmse_mm,mae_px,rmse_px,valid_px,total_px\n")
+        f.write(f"{gt_path},{z_path},{MM_PER_GT_UNIT},{MM_PER_PIXEL},{int(flipped)},{offset:.6f},{mae_mm:.6f},{rmse_mm:.6f},{mae_px:.6f},{rmse_px:.6f},{int(valid.sum())},{gt_mm.size}\n")
+
+    print(f"Results saved to: {out_dir}")
+
+if __name__ == "__main__":
+    main()
