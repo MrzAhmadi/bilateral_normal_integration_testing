@@ -38,37 +38,59 @@ Produced after changes in [commit 8e735c6](https://github.com/MrzAhmadi/bilatera
 
 ---
 
-## 4. Depth Evaluation
-
-This evaluation compares the integrated depth (`z_pix.npy`) to the ground-truth depth map (`depth_map.png`), converting both to millimeters for a direct numerical comparison.
+## 4. Depth Evaluation (Ground Truth Normals)
 
 **Unit Conversions**
 - **GT (16-bit) → mm:**  
-  ```
-  mm_per_gt_unit = 5000 / 65535 = 0.0762951095 mm/unit
-  ```
+  `mm_per_gt_unit = 5000 / 65535 = 0.0762951095 mm/unit`
 - **Integrated depth (pixels) → mm:**  
-  ```
-  mm_per_pixel = 4000 / 512 = 7.8125 mm/pixel
-  ```
+  `mm_per_pixel = 4000 / 512 = 7.8125 mm/pixel`
 
 **Alignment Details**
 - Sign flipped: **Yes**
 - Applied zero offset: **4849.739258 mm** (~4.85 m)
 
-**Metrics**
+**Metrics (GT Normals)**
 | Metric | Value (mm) | Value (px) |
 |---|---:|---:|
 | MAE | **733.578369** | **93.898031** |
 | RMSE | **915.681335** | **117.207211** |
 
----
-
-## 5. Visual Results
-
+**Visual Results**
 | Ground Truth | Aligned Estimate | Absolute Error (mm) |
 |---|---|---|
 | ![GT](data/Fig8_wallrelief/eval_results/gt_mm_norm.png) | ![Estimate](data/Fig8_wallrelief/eval_results/est_mm_aligned_norm.png) | ![Error](data/Fig8_wallrelief/eval_results/error_mm_abs.png) |
+
+---
+
+## 5. Photometric Stereo Evaluation
+
+We also tested the pipeline using **normals estimated via Photometric Stereo (PS)** instead of ground-truth normals.  
+The script [`photometric_stereo.py`](photometric_stereo.py) (located in the root of the repository) was added for this purpose.
+
+**Integrated Depth Map**  
+![Integrated Depth Map](data/Fig8_wallrelief_ps/z_pix.png)
+
+### Commands
+
+```bash
+python photometric_stereo.py   --images_dir data/Fig8_wallrelief/material_4   --lights data/Fig8_wallrelief/lights.txt   --mask data/Fig8_wallrelief/mask.png   --shadows_dir data/Fig8_wallrelief/shadows   --out_dir data/Fig8_wallrelief_ps   --copy_from data/Fig8_wallrelief
+
+python bilateral_normal_integration_numpy.py --path data/Fig8_wallrelief_ps
+
+python evaluate_depth_error.py --path data/Fig8_wallrelief_ps
+```
+
+### Metrics (PS Normals)
+| Metric | Value (mm) | Value (px) |
+|---|---:|---:|
+| MAE | **667.974182** | **85.500695** |
+| RMSE | **892.293030** | **114.213508** |
+
+### Visual Results (PS Normals)
+| Ground Truth | Aligned Estimate | Absolute Error (mm) |
+|---|---|---|
+| ![GT](data/Fig8_wallrelief_ps/eval_results/gt_mm_norm.png) | ![Estimate](data/Fig8_wallrelief_ps/eval_results/est_mm_aligned_norm.png) | ![Error](data/Fig8_wallrelief_ps/eval_results/error_mm_abs.png) |
 
 ---
 
@@ -80,4 +102,10 @@ python bilateral_normal_integration_numpy.py --path data/Fig8_wallrelief
 
 # Evaluate depth against ground truth
 python evaluate_depth_error.py --path data/Fig8_wallrelief
+
+# Photometric Stereo case
+python photometric_stereo.py   --images_dir data/Fig8_wallrelief/material_4   --lights data/Fig8_wallrelief/lights.txt   --mask data/Fig8_wallrelief/mask.png   --shadows_dir data/Fig8_wallrelief/shadows   --out_dir data/Fig8_wallrelief_ps   --copy_from data/Fig8_wallrelief
+
+python bilateral_normal_integration_numpy.py --path data/Fig8_wallrelief_ps
+python evaluate_depth_error.py --path data/Fig8_wallrelief_ps
 ```
