@@ -1,2 +1,2 @@
-gt_path,z_path,mm_per_gt_unit,mm_per_pixel,flipped,offset_mm,mae_mm,rmse_mm,mae_px,rmse_px,valid_px,total_px
-data/Fig8_wallrelief/ground_truth/depth_map.png,data/Fig8_wallrelief/z_pix.npy,0.07629510948348212,7.8125,1,4849.739258,733.578369,915.681335,93.898031,117.207211,262144,262144
+gt_path,z_path,mm_per_gt_unit,mm_per_pixel,a_scale,b_offset,mae_mm,rmse_mm,mae_px,rmse_px,valid_px,total_px
+data/Fig8_wallrelief/ground_truth/depth_map.png,data/Fig8_wallrelief/z_pix.npy,0.07629510948348212,7.8125,-0.035702,4825.830566,71.553513,88.578079,9.158850,11.337994,262144,262144

@@ -47,19 +47,20 @@ Produced after changes in [commit 8e735c6](https://github.com/MrzAhmadi/bilatera
   `mm_per_pixel = 4000 / 512 = 7.8125 mm/pixel`
 
 **Alignment Details**
-- Sign flipped: **Yes**
-- Applied zero offset: **4849.739258 mm** (~4.85 m)
+- Sign flipped: **Yes (via affine scale a = -0.035702)**
+- Applied zero offset: **4825.830566 mm** (~4.83 m)
 
 **Metrics (GT Normals)**
 | Metric | Value (mm) | Value (px) |
 |---|---:|---:|
-| MAE | **733.578369** | **93.898031** |
-| RMSE | **915.681335** | **117.207211** |
+| MAE | **71.553513** | **9.158850** |
+| RMSE | **88.578079** | **11.337994** |
 
 **Visual Results**
 | Ground Truth | Aligned Estimate | Absolute Error (mm) |
-|---|---|---|
-| ![GT](data/Fig8_wallrelief/eval_results/gt_mm_norm.png) | ![Estimate](data/Fig8_wallrelief/eval_results/est_mm_aligned_norm.png) | ![Error](data/Fig8_wallrelief/eval_results/error_mm_abs.png) |
+|--------------|------------------|---------------------|
+| <img src="data/Fig8_wallrelief/eval_results/gt_mm_norm.png" width="256"/> | <img src="data/Fig8_wallrelief/eval_results/est_mm_aligned_norm.png" width="256"/> | <img src="data/Fig8_wallrelief/eval_results/error_mm_abs.png" width="256"/> |
+
 
 ---
 
@@ -84,13 +85,13 @@ python evaluate_depth_error.py --path data/Fig8_wallrelief_ps
 ### Metrics (PS Normals)
 | Metric | Value (mm) | Value (px) |
 |---|---:|---:|
-| MAE | **667.974182** | **85.500695** |
-| RMSE | **892.293030** | **114.213508** |
+| MAE | **65.562279** | **8.391972** |
+| RMSE | **80.596222** | **10.316316** |
 
 ### Visual Results (PS Normals)
 | Ground Truth | Aligned Estimate | Absolute Error (mm) |
-|---|---|---|
-| ![GT](data/Fig8_wallrelief_ps/eval_results/gt_mm_norm.png) | ![Estimate](data/Fig8_wallrelief_ps/eval_results/est_mm_aligned_norm.png) | ![Error](data/Fig8_wallrelief_ps/eval_results/error_mm_abs.png) |
+|--------------|------------------|---------------------|
+| <img src="data/Fig8_wallrelief_ps/eval_results/gt_mm_norm.png" width="256"/> | <img src="data/Fig8_wallrelief_ps/eval_results/est_mm_aligned_norm.png" width="256"/> | <img src="data/Fig8_wallrelief_ps/eval_results/error_mm_abs.png" width="256"/> |
 
 ---
 
