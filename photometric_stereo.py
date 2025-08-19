@@ -20,7 +20,7 @@ def load_images(images_dir):
         imgs.append(im.astype(np.float32) / 255.0)
     I = np.stack(imgs, axis=2)  # H x W x N
     return I, paths
-    
+
 def load_lights(lights_path, expected_N=None):
     L = np.loadtxt(lights_path).astype(np.float32)  # N x 3
     if L.ndim != 2 or L.shape[1] != 3:
@@ -51,60 +51,71 @@ def load_shadow_masks(shadows_dir, shape_hw, N, image_paths_sorted):
                 W[:, :, i] = (m > 0).astype(np.float32)
     return W
 
-def save_normals_png(normals, out_path_png):
+def save_normals_png_dataset(normals, out_path_png):
+    """
+    Save normals in the dataset encoding expected by BiNI/evaluator:
+      R = ny, G = nx, B = -nz   (each in [-1,1] mapped to [0,255])
+    Input 'normals' must be in camera coordinates (nx, ny, nz) with unit length.
+    """
     n = np.clip(normals, -1.0, 1.0)
-    n_img = ((n + 1.0) * 0.5 * 255.0).astype(np.uint8)
+    r = ((n[..., 1] + 1.0) * 0.5 * 255.0).astype(np.uint8)   # ny -> R
+    g = ((n[..., 0] + 1.0) * 0.5 * 255.0).astype(np.uint8)   # nx -> G
+    b = ((-n[..., 2] + 1.0) * 0.5 * 255.0).astype(np.uint8)  # -nz -> B
+    n_img = np.stack([r, g, b], axis=-1)
     cv2.imwrite(out_path_png, cv2.cvtColor(n_img, cv2.COLOR_RGB2BGR))
 
 def main():
     ap = argparse.ArgumentParser(description="Calibrated Lambertian Photometric Stereo")
-    ap.add_argument("--images_dir", required=True)
-    ap.add_argument("--lights", required=True)
-    ap.add_argument("--mask", default="")
-    ap.add_argument("--shadows_dir", default="")
-    ap.add_argument("--shadow_thresh", type=float, default=0.03)
-    ap.add_argument("--out_dir", required=True)
-    ap.add_argument("--copy_from", default="data/Fig8_wallrelief", help="Folder to copy mask and GT depth from")
+    ap.add_argument("--images_dir", required=True, help="Folder with per-light images")
+    ap.add_argument("--lights", required=True, help="Path to lights.txt (Nx3)")
+    ap.add_argument("--mask", default="", help="Optional mask.png (white=valid)")
+    ap.add_argument("--shadows_dir", default="", help="Optional folder of per-image shadow masks (white=valid)")
+    ap.add_argument("--shadow_thresh", type=float, default=0.03, help="Ignore pixels darker than this [0..1]")
+    ap.add_argument("--out_dir", required=True, help="Output folder")
+    ap.add_argument("--copy_from", default="data/Fig8_wallrelief",
+                    help="Folder to copy mask.png and ground_truth/depth_map.png from")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
 
     # 1) Load images and lights
-    I, img_paths = load_images(args.images_dir)
+    I, img_paths = load_images(args.images_dir)   # H x W x N
     H, W, N = I.shape
-    L = load_lights(args.lights, expected_N=N)
+    L = load_lights(args.lights, expected_N=N)    # N x 3
 
     # 2) Mask(s)
-    mask = load_mask(args.mask, (H, W))
-    Wshadow = load_shadow_masks(args.shadows_dir, (H, W), N, img_paths)
+    mask = load_mask(args.mask, (H, W))           # H x W (bool)
+    Wshadow = load_shadow_masks(args.shadows_dir, (H, W), N, img_paths)  # H x W x N or None
 
-    # 3) Weights per observation
-    Wobs = (I > args.shadow_thresh).astype(np.float32)
+    # 3) Per-observation weights
+    Wobs = (I > args.shadow_thresh).astype(np.float32)  # H x W x N
     if Wshadow is not None:
         Wobs *= Wshadow
 
-    # 4) Build A and b
-    A = np.einsum('hwn,nc,nd->hwcd', Wobs, L, L)
-    b = np.einsum('hwn,nc,hwn->hwc', Wobs, L, I)
+    # 4) Build normal equations A = Σ w L L^T, b = Σ w I L  (per pixel)
+    A = np.einsum('hwn,nc,nd->hwcd', Wobs, L, L)   # H x W x 3 x 3
+    b = np.einsum('hwn,nc,hwn->hwc', Wobs, L, I)   # H x W x 3
 
-    # 5) Solve for G
+    # 5) Solve for G (albedo-scaled normals)
     A_ = A.reshape(-1, 3, 3)
     b_ = b.reshape(-1, 3)
     reg = 1e-6 * np.eye(3, dtype=np.float32)[None, :, :]
-    g_ = np.linalg.solve(A_ + reg, b_)
+    g_ = np.linalg.solve(A_ + reg, b_)             # (H*W) x 3
     G = g_.reshape(H, W, 3)
 
-    # 6) Normals & albedo
+    # 6) Unit normals & albedo (camera coords: nx, ny, nz)
     albedo = np.linalg.norm(G, axis=2, keepdims=True) + 1e-8
-    Nrm = G / albedo
+    Nrm = G / albedo                               # H x W x 3
+    # DO NOT globally flip axes; encoding handled on save.
     Nrm[~mask] = 0.0
     albedo[~mask] = 0.0
 
     # 7) Save results
     np.save(os.path.join(args.out_dir, "normals_unit.npy"), Nrm.astype(np.float32))
     np.save(os.path.join(args.out_dir, "albedo.npy"), albedo.squeeze(-1).astype(np.float32))
-    save_normals_png(Nrm, os.path.join(args.out_dir, "normal_map.png"))
+    save_normals_png_dataset(Nrm, os.path.join(args.out_dir, "normal_map.png"))
 
+    # Albedo preview
     alb = albedo.squeeze(-1)
     if np.any(mask):
         s = np.percentile(alb[mask], 99)
@@ -116,7 +127,7 @@ def main():
 
     print(f"[OK] Saved: {os.path.join(args.out_dir, 'normal_map.png')}")
 
-    # 8) Auto-copy mask & GT depth
+    # 8) Copy mask & GT depth for downstream scripts
     mask_src = os.path.join(args.copy_from, "mask.png")
     depth_src = os.path.join(args.copy_from, "ground_truth", "depth_map.png")
     if os.path.isfile(mask_src):

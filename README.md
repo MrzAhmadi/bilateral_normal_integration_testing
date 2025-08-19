@@ -61,7 +61,6 @@ Produced after changes in [commit 8e735c6](https://github.com/MrzAhmadi/bilatera
 |--------------|------------------|---------------------|
 | <img src="data/Fig8_wallrelief/eval_results/gt_mm_norm.png" width="256"/> | <img src="data/Fig8_wallrelief/eval_results/est_mm_aligned_norm.png" width="256"/> | <img src="data/Fig8_wallrelief/eval_results/error_mm_abs.png" width="256"/> |
 
-
 ---
 
 ## 5. Photometric Stereo Evaluation
@@ -85,8 +84,8 @@ python evaluate_depth_error.py --path data/Fig8_wallrelief_ps
 ### Metrics (PS Normals)
 | Metric | Value (mm) | Value (px) |
 |---|---:|---:|
-| MAE | **65.562279** | **8.391972** |
-| RMSE | **80.596222** | **10.316316** |
+| MAE | **65.444206** | **8.376858** |
+| RMSE | **80.670036** | **10.325765** |
 
 ### Visual Results (PS Normals)
 | Ground Truth | Aligned Estimate | Absolute Error (mm) |
@@ -95,7 +94,38 @@ python evaluate_depth_error.py --path data/Fig8_wallrelief_ps
 
 ---
 
-## 6. Reproducibility
+## 6. Compare Normals
+
+We use `compare_normals.py` to measure angular errors between **ground-truth normals** and **PS-estimated normals**.
+
+### Command
+```bash
+python compare_normals.py
+```
+
+### Output
+```
+[OK] Saved to data/Fig8_wallrelief_ps/normals_compare
+Mean angular error: 38.04 deg | Median: 37.84 deg | (global flip applied)
+```
+
+### Explanation
+- Computes **per-pixel angular error** between GT normals and PS normals.
+- Applies a **global flip correction** if average error is lower after flipping all normals.
+- Produces visualization in `data/Fig8_wallrelief_ps/normals_compare/`:
+  - `gt_normal_rgb.png`: Ground-truth normals (RGB encoded).
+  - `ps_normal_rgb.png`: PS-estimated normals.
+  - `angular_error_deg.png`: Heatmap of angular error (degrees).
+
+---
+
+## 7. Check lights normalization
+```bash
+python3 -c "import numpy as np; L=np.loadtxt('lights.txt'); norms=np.linalg.norm(L, axis=1); print('Mean norm:', np.mean(norms), 'Should be close to 1')"
+Mean norm: 0.999981787491417 Should be close to 1
+```
+
+## 8. Reproducibility
 
 ```bash
 # Run integration to generate z_pix.npy
@@ -109,4 +139,7 @@ python photometric_stereo.py   --images_dir data/Fig8_wallrelief/material_4   --
 
 python bilateral_normal_integration_numpy.py --path data/Fig8_wallrelief_ps
 python evaluate_depth_error.py --path data/Fig8_wallrelief_ps
+
+# Compare normals (GT vs PS)
+python compare_normals.py
 ```
