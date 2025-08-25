@@ -63,17 +63,38 @@ Produced after changes in [commit 8e735c6](https://github.com/MrzAhmadi/bilatera
 
 ---
 
+# Bilateral Normal Integration Testing
+
 ## 5. Photometric Stereo Evaluation
-### Metrics (PS Normals)
+
+We also tested the pipeline using **normals estimated via Photometric Stereo (PS)** instead of ground-truth normals.
+
+The script `photometric_stereo.py` (located in the root of the repository) was used for this purpose.
+
+---
+
+### Estimated Normals (Photometric Stereo)
+![Estimated Normals](data/Fig8_wallrelief_ps/normal_map.png)
+
+---
+
+### Integrated Depth Map (Aligned to GT)
+Evaluation was done with `evaluate_depth_error.py`.
+
+**Metrics (PS Normals):**
+
 | Metric | Value (mm) | Value (px) |
-|---|---:|---:|
-| MAE | **65.444206** | **8.376858** |
-| RMSE | **80.670036** | **10.325765** |
+|--------|------------|------------|
+| MAE    | 65.444206  | 8.376858   |
+| RMSE   | 80.670036  | 10.325765  |
+
+---
 
 ### Visual Results (PS Normals)
+
 | Ground Truth | Aligned Estimate | Absolute Error (mm) |
-|--------------|------------------|---------------------|
-| <img src="data/Fig8_wallrelief_ps/eval_results/gt_mm_norm.png" width="256"/> | <img src="data/Fig8_wallrelief_ps/eval_results/est_mm_aligned_norm.png" width="256"/> | <img src="data/Fig8_wallrelief_ps/eval_results/error_mm_abs.png" width="256"/> |
+|--------------|-----------------|----------------------|
+| ![GT](data/Fig8_wallrelief_ps/eval_results/gt_mm_norm.png) | ![Estimate](data/Fig8_wallrelief_ps/eval_results/est_mm_aligned_norm.png) | ![Error](data/Fig8_wallrelief_ps/eval_results/error_mm_abs.png) |
 
 ---
 
