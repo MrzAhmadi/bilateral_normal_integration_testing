@@ -85,8 +85,8 @@ Evaluation was done with `evaluate_depth_error.py`.
 
 | Metric | Value (mm) | Value (px) |
 |--------|------------|------------|
-| MAE    | 58.773094  | 7.522956   |
-| RMSE   | 71.202957  | 9.113979  |
+| MAE    | 58.735207  | 7.518106   |
+| RMSE   | 71.137878  | 9.113979  |
 
 ---
 
@@ -128,15 +128,17 @@ python photometric_stereo.py \
     --copy_from data/Fig8_wallrelief
 
 # Step 4a: Depth integration (bilateral)
-python bilateral_normal_integration_numpy_ps.py \
-    --path data/Fig8_wallrelief_ps \
-    --k 2 \
-    --iter 150
+python run_ps_with_fc_prior.py \
+  --path data/Fig8_wallrelief_ps \
+  --k 3.0 \
+  --iter 300 \
+  --tol 1e-6 \
+  --lambda1 0.3
 
 # Step 4b: (Alternative) Depth integration with FC prior
 python run_ps_with_fc_prior.py \
     --path data/Fig8_wallrelief_ps \
-    --k 4 \
+    --k 3 \
     --iter 300 \
     --tol 1e-6 \
     --lambda1 0.1
