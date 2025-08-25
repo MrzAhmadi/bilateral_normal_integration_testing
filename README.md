@@ -85,8 +85,8 @@ Evaluation was done with `evaluate_depth_error.py`.
 
 | Metric | Value (mm) | Value (px) |
 |--------|------------|------------|
-| MAE    | 65.444206  | 8.376858   |
-| RMSE   | 80.670036  | 10.325765  |
+| MAE    | 58.773094  | 7.522956   |
+| RMSE   | 71.202957  | 9.113979  |
 
 ---
 
@@ -107,13 +107,18 @@ Mean norm: 0.999981787491417 Should be close to 1
 ## 7. Reproducibility
 
 ```bash
-# Run integration to generate z_pix.npy
-python bilateral_normal_integration_numpy.py --path data/Fig8_wallrelief
+# --- Step 1: Run integration to generate z_pix.npy ---
+python bilateral_normal_integration_numpy.py \
+    --path data/Fig8_wallrelief
 
-# Evaluate depth against ground truth
-python evaluate_depth_error.py --path data/Fig8_wallrelief
+# --- Step 2: Evaluate depth against ground truth ---
+python evaluate_depth_error.py \
+    --path data/Fig8_wallrelief
 
-# Photometric Stereo case
+
+# === Photometric Stereo Pipeline ===
+
+# Step 3: Run Photometric Stereo
 python photometric_stereo.py \
     --images_dir data/Fig8_wallrelief/material_4 \
     --lights data/Fig8_wallrelief/lights.txt \
@@ -122,11 +127,21 @@ python photometric_stereo.py \
     --out_dir data/Fig8_wallrelief_ps \
     --copy_from data/Fig8_wallrelief
 
+# Step 4a: Depth integration (bilateral)
 python bilateral_normal_integration_numpy_ps.py \
-    -p data/Fig8_wallrelief_ps \
-    -k 2 \
-    -i 150
-    
+    --path data/Fig8_wallrelief_ps \
+    --k 2 \
+    --iter 150
 
-python evaluate_depth_error.py --path data/Fig8_wallrelief_ps
+# Step 4b: (Alternative) Depth integration with FC prior
+python run_ps_with_fc_prior.py \
+    --path data/Fig8_wallrelief_ps \
+    --k 4 \
+    --iter 300 \
+    --tol 1e-6 \
+    --lambda1 0.1
+
+# Step 5: Evaluate depth result
+python evaluate_depth_error.py \
+    --path data/Fig8_wallrelief_ps
 ```

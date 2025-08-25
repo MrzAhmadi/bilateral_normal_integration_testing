@@ -122,6 +122,32 @@ def main():
     Wshadow = load_shadow_masks(args.shadows_dir, (H, W), N, img_paths)
     Wshadow, _ = maybe_fix_shadow_polarity(Wshadow)
 
+    # --- Exposure normalization per image (robust; ignore shadows) ---
+    # Build a validity mask per image: inside mask, above threshold, not shadowed
+    valid = (I > args.shadow_thresh) & mask[..., None]   # (H,W,N)
+    if Wshadow is not None:
+        valid &= (Wshadow > 0.5)
+
+    # Take per-image median only over valid pixels
+    I_valid = np.where(valid, I, np.nan)                 # invalid -> NaN
+    med = np.nanmedian(I_valid.reshape(-1, N), axis=0)   # (N,)
+
+    # Handle edge cases and stabilize
+    if not np.isfinite(med).all():
+        # replace any NaNs with the global nanmedian
+        global_med = np.nanmedian(med)
+        med = np.where(np.isfinite(med), med, global_med)
+
+    med = np.clip(med, 1e-3, None)                       # avoid tiny divisors
+    scale = med / np.nanmedian(med)                      # relative scaling
+    I = I / scale                                        # broadcast over N
+
+    # (optional) save the per-image exposure scale for inspection
+    np.save(os.path.join(args.out_dir, "ps_exposure_scale.npy"), scale.astype(np.float32))
+
+    print("[DEBUG] Exposure normalization done. scale stats: "
+        f"min={scale.min():.3g}, med={np.nanmedian(scale):.3g}, max={scale.max():.3g}")
+
     # 3) Weights
     Wobs = (I > args.shadow_thresh).astype(np.float32)
     if Wshadow is not None:
