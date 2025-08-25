@@ -19,6 +19,7 @@ def load_images(images_dir):
             raise FileNotFoundError(f"Could not read image {p}")
         imgs.append(im.astype(np.float32) / 255.0)
     I = np.stack(imgs, axis=2)  # H x W x N
+    print(f"[INFO] Loaded {len(paths)} images from {images_dir} -> shape {I.shape}")
     return I, paths
 
 def load_lights(lights_path, expected_N=None):
@@ -28,34 +29,57 @@ def load_lights(lights_path, expected_N=None):
     L /= (np.linalg.norm(L, axis=1, keepdims=True) + 1e-8)
     if expected_N is not None and L.shape[0] != expected_N:
         raise ValueError(f"Number of lights ({L.shape[0]}) != number of images ({expected_N}).")
+    print(f"[INFO] Loaded lights: {L.shape[0]} directions from {lights_path}")
     return L
 
 def load_mask(mask_path, shape_hw):
     if not mask_path or not os.path.isfile(mask_path):
+        print("[WARN] No mask provided; using all-ones mask.")
         return np.ones(shape_hw, dtype=bool)
     m = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
     if m is None or m.shape != shape_hw:
         raise ValueError(f"Mask not found or wrong size: expected {shape_hw}, got {None if m is None else m.shape}")
+    valid = int((m > 0).sum())
+    print(f"[INFO] Loaded mask {mask_path} with {valid} valid pixels")
     return (m > 0)
 
 def load_shadow_masks(shadows_dir, shape_hw, N, image_paths_sorted):
     if not shadows_dir or not os.path.isdir(shadows_dir):
+        print("[INFO] No shadows_dir; proceeding without per-image shadow masks.")
         return None
     W = np.ones((shape_hw[0], shape_hw[1], N), dtype=np.float32)
+    used = 0
     for i, p in enumerate(image_paths_sorted):
         fname = os.path.basename(p)
         cand = os.path.join(shadows_dir, fname)
         if os.path.isfile(cand):
             m = cv2.imread(cand, cv2.IMREAD_GRAYSCALE)
             if m is not None and m.shape == shape_hw:
+                # initial assumption: white means "valid". We'll auto-detect inversion later.
                 W[:, :, i] = (m > 0).astype(np.float32)
+                used += 1
+    print(f"[INFO] Loaded {used}/{N} shadow masks from {shadows_dir}")
     return W
+
+def maybe_fix_shadow_polarity(Wshadow):
+    """Detect if shadow masks are inverted (white=shadow). If so, flip them."""
+    if Wshadow is None:
+        return None, False
+    frac_valid = float(Wshadow.mean())
+    print(f"[DEBUG] Shadow masks fraction 'valid' (mean): {frac_valid:.4f}")
+    # Heuristic: if <10% of pixels are 'valid' on average, likely inverted → flip.
+    flipped = False
+    if frac_valid < 0.10:
+        Wshadow = 1.0 - Wshadow
+        flipped = True
+        print("[INFO] Shadow masks looked inverted (white=shadow). Inverted so white=valid.")
+    return Wshadow, flipped
 
 def save_normals_png_dataset(normals, out_path_png):
     """
-    Save normals in the dataset encoding expected by BiNI/evaluator:
+    Dataset encoding:
       R = ny, G = nx, B = -nz   (each in [-1,1] mapped to [0,255])
-    Input 'normals' must be in camera coordinates (nx, ny, nz) with unit length.
+    Input 'normals' are camera coords (nx, ny, nz), unit length.
     """
     n = np.clip(normals, -1.0, 1.0)
     r = ((n[..., 1] + 1.0) * 0.5 * 255.0).astype(np.uint8)   # ny -> R
@@ -66,49 +90,77 @@ def save_normals_png_dataset(normals, out_path_png):
 
 def main():
     ap = argparse.ArgumentParser(description="Calibrated Lambertian Photometric Stereo")
-    ap.add_argument("--images_dir", required=True, help="Folder with per-light images")
-    ap.add_argument("--lights", required=True, help="Path to lights.txt (Nx3)")
-    ap.add_argument("--mask", default="", help="Optional mask.png (white=valid)")
-    ap.add_argument("--shadows_dir", default="", help="Optional folder of per-image shadow masks (white=valid)")
-    ap.add_argument("--shadow_thresh", type=float, default=0.03, help="Ignore pixels darker than this [0..1]")
-    ap.add_argument("--out_dir", required=True, help="Output folder")
+    ap.add_argument("--images_dir", required=True)
+    ap.add_argument("--lights", required=True)
+    ap.add_argument("--mask", default="")
+    ap.add_argument("--shadows_dir", default="")
+    ap.add_argument("--shadow_thresh", type=float, default=0.03)
+    ap.add_argument("--out_dir", required=True)
     ap.add_argument("--copy_from", default="data/Fig8_wallrelief",
-                    help="Folder to copy mask.png and ground_truth/depth_map.png from")
+                    help="Folder to copy mask.png from (GT depth will NOT be copied)")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
 
     # 1) Load images and lights
-    I, img_paths = load_images(args.images_dir)   # H x W x N
+    I, img_paths = load_images(args.images_dir)
     H, W, N = I.shape
-    L = load_lights(args.lights, expected_N=N)    # N x 3
+    L = load_lights(args.lights, expected_N=N)
 
     # 2) Mask(s)
-    mask = load_mask(args.mask, (H, W))           # H x W (bool)
-    Wshadow = load_shadow_masks(args.shadows_dir, (H, W), N, img_paths)  # H x W x N or None
+    mask = load_mask(args.mask, (H, W))
+    Wshadow = load_shadow_masks(args.shadows_dir, (H, W), N, img_paths)
+    Wshadow, flipped = maybe_fix_shadow_polarity(Wshadow)
 
     # 3) Per-observation weights
-    Wobs = (I > args.shadow_thresh).astype(np.float32)  # H x W x N
+    Wobs = (I > args.shadow_thresh).astype(np.float32)
     if Wshadow is not None:
         Wobs *= Wshadow
+    Wobs *= mask[..., None].astype(np.float32)
+    valid_obs = int((Wobs > 0).sum())
+    total_obs  = H * W * N
+    frac = valid_obs / total_obs
+    print(f"[INFO] Valid observations after thresh/shadow/mask: {valid_obs} / {total_obs} ({frac:.4%})")
 
-    # 4) Build normal equations A = Σ w L L^T, b = Σ w I L  (per pixel)
-    A = np.einsum('hwn,nc,nd->hwcd', Wobs, L, L)   # H x W x 3 x 3
-    b = np.einsum('hwn,nc,hwn->hwc', Wobs, L, I)   # H x W x 3
+    # If still almost nothing is left, ignore shadows entirely (fallback)
+    if frac < 0.02 and Wshadow is not None:
+        print("[WARN] Too few valid observations after applying shadow masks. "
+              "Falling back to ignoring shadows.")
+        Wobs = (I > args.shadow_thresh).astype(np.float32)
+        Wobs *= mask[..., None].astype(np.float32)
+        valid_obs = int((Wobs > 0).sum())
+        frac = valid_obs / total_obs
+        print(f"[INFO] Valid observations WITHOUT shadows: {valid_obs} / {total_obs} ({frac:.4%})")
+
+    # 4) Build normal equations A = Σ w L L^T, b = Σ w I L
+    A = np.einsum('hwn,nc,nd->hwcd', Wobs, L, L)
+    b = np.einsum('hwn,nc,hwn->hwc', Wobs, L, I)
 
     # 5) Solve for G (albedo-scaled normals)
     A_ = A.reshape(-1, 3, 3)
     b_ = b.reshape(-1, 3)
     reg = 1e-6 * np.eye(3, dtype=np.float32)[None, :, :]
-    g_ = np.linalg.solve(A_ + reg, b_)             # (H*W) x 3
+    try:
+        g_ = np.linalg.solve(A_ + reg, b_)
+    except np.linalg.LinAlgError:
+        g_, *_ = np.linalg.lstsq((A_ + reg), b_, rcond=None)
     G = g_.reshape(H, W, 3)
 
     # 6) Unit normals & albedo (camera coords: nx, ny, nz)
     albedo = np.linalg.norm(G, axis=2, keepdims=True) + 1e-8
-    Nrm = G / albedo                               # H x W x 3
-    # DO NOT globally flip axes; encoding handled on save.
+    Nrm = G / albedo
     Nrm[~mask] = 0.0
     albedo[~mask] = 0.0
+
+    # Enforce nz > 0 within mask
+    nz_masked = Nrm[..., 2][mask]
+    mean_nz_before = float(np.nanmean(nz_masked)) if nz_masked.size else 0.0
+    print(f"[INFO] mean(nz within mask) BEFORE flip: {mean_nz_before:.6f}")
+    if nz_masked.size and mean_nz_before < 0:
+        Nrm = -Nrm
+        print("[INFO] Applied global flip to ensure nz > 0")
+    mean_nz_after = float(np.nanmean(Nrm[..., 2][mask])) if nz_masked.size else 0.0
+    print(f"[INFO] mean(nz within mask) AFTER  flip: {mean_nz_after:.6f}")
 
     # 7) Save results
     np.save(os.path.join(args.out_dir, "normals_unit.npy"), Nrm.astype(np.float32))
@@ -117,27 +169,22 @@ def main():
 
     # Albedo preview
     alb = albedo.squeeze(-1)
-    if np.any(mask):
+    if mask.any():
         s = np.percentile(alb[mask], 99)
-        if s <= 1e-8: s = 1.0
+        if s <= 1e-8:
+            s = 1.0
         alb_vis = np.clip(alb / s, 0, 1)
     else:
         alb_vis = np.clip(alb, 0, 1)
     cv2.imwrite(os.path.join(args.out_dir, "albedo_preview.png"), (alb_vis * 255).astype(np.uint8))
 
-    print(f"[OK] Saved: {os.path.join(args.out_dir, 'normal_map.png')}")
+    print(f"[OK] Wrote: {args.out_dir}/normals_unit.npy, normal_map.png, albedo.npy, albedo_preview.png")
 
-    # 8) Copy mask & GT depth for downstream scripts
+    # 8) Copy ONLY the mask (do NOT copy GT depth into PS results)
     mask_src = os.path.join(args.copy_from, "mask.png")
-    depth_src = os.path.join(args.copy_from, "ground_truth", "depth_map.png")
     if os.path.isfile(mask_src):
         shutil.copy(mask_src, os.path.join(args.out_dir, "mask.png"))
         print(f"[OK] Copied mask from {mask_src}")
-    gt_dest_dir = os.path.join(args.out_dir, "ground_truth")
-    os.makedirs(gt_dest_dir, exist_ok=True)
-    if os.path.isfile(depth_src):
-        shutil.copy(depth_src, os.path.join(gt_dest_dir, "depth_map.png"))
-        print(f"[OK] Copied GT depth from {depth_src}")
 
 if __name__ == "__main__":
     main()
