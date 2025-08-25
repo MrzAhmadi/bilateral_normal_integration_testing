@@ -98,38 +98,13 @@ Evaluation was done with `evaluate_depth_error.py`.
 
 ---
 
-## 6. Compare Normals
-
-We use `compare_normals.py` to measure angular errors between **ground-truth normals** and **PS-estimated normals**.
-
-### Command
-```bash
-python compare_normals.py
-```
-
-### Output
-```
-[OK] Saved to data/Fig8_wallrelief_ps/normals_compare
-Mean angular error: 38.04 deg | Median: 37.84 deg | (global flip applied)
-```
-
-### Explanation
-- Computes **per-pixel angular error** between GT normals and PS normals.
-- Applies a **global flip correction** if average error is lower after flipping all normals.
-- Produces visualization in `data/Fig8_wallrelief_ps/normals_compare/`:
-  - `gt_normal_rgb.png`: Ground-truth normals (RGB encoded).
-  - `ps_normal_rgb.png`: PS-estimated normals.
-  - `angular_error_deg.png`: Heatmap of angular error (degrees).
-
----
-
-## 7. Check lights normalization
+## 6. Check lights normalization
 ```bash
 python3 -c "import numpy as np; L=np.loadtxt('lights.txt'); norms=np.linalg.norm(L, axis=1); print('Mean norm:', np.mean(norms), 'Should be close to 1')"
 Mean norm: 0.999981787491417 Should be close to 1
 ```
 
-## 8. Reproducibility
+## 7. Reproducibility
 
 ```bash
 # Run integration to generate z_pix.npy
@@ -139,11 +114,19 @@ python bilateral_normal_integration_numpy.py --path data/Fig8_wallrelief
 python evaluate_depth_error.py --path data/Fig8_wallrelief
 
 # Photometric Stereo case
-python photometric_stereo.py   --images_dir data/Fig8_wallrelief/material_4   --lights data/Fig8_wallrelief/lights.txt   --mask data/Fig8_wallrelief/mask.png   --shadows_dir data/Fig8_wallrelief/shadows   --out_dir data/Fig8_wallrelief_ps   --copy_from data/Fig8_wallrelief
+python photometric_stereo.py \
+    --images_dir data/Fig8_wallrelief/material_4 \
+    --lights data/Fig8_wallrelief/lights.txt \
+    --mask data/Fig8_wallrelief/mask.png \
+    --shadows_dir data/Fig8_wallrelief/shadows \
+    --out_dir data/Fig8_wallrelief_ps \
+    --copy_from data/Fig8_wallrelief
 
-python bilateral_normal_integration_numpy.py --path data/Fig8_wallrelief_ps
+python bilateral_normal_integration_numpy_ps.py \
+    -p data/Fig8_wallrelief_ps \
+    -k 2 \
+    -i 150
+    
+
 python evaluate_depth_error.py --path data/Fig8_wallrelief_ps
-
-# Compare normals (GT vs PS)
-python compare_normals.py
 ```

@@ -30,6 +30,8 @@ def load_gt_mm(root):
     if gt.dtype != np.uint16:
         raise TypeError(f"GT must be 16-bit (uint16). Got {gt.dtype} at {gt_path}")
     gt_mm = gt.astype(np.float32) * MM_PER_GT_UNIT
+    print(f"[DEBUG] Loaded GT depth {gt_path}, dtype={gt.dtype}, shape={gt.shape}, "
+          f"range=({gt_mm.min():.2f}, {gt_mm.max():.2f}) mm")
     return gt_mm, gt_path
 
 
@@ -38,29 +40,30 @@ def load_est_mm(root):
     if not os.path.isfile(z_path):
         raise FileNotFoundError(f"{z_path} not found. Run the integrator to produce z_pix.npy.")
     z = np.load(z_path).astype(np.float32)
+    print(f"[DEBUG] Loaded est depth {z_path}, shape={z.shape}, "
+          f"range=({z.min():.2f}, {z.max():.2f}) px-units")
     return z * MM_PER_PIXEL, z_path
 
 
 def load_mask(root, shape):
     m = cv2.imread(os.path.join(root, "mask.png"), cv2.IMREAD_GRAYSCALE)
     if m is None:
+        print("[WARN] No mask found -> using all-ones mask")
         return np.ones(shape, dtype=bool)
     if m.shape != shape:
         raise ValueError(f"Mask shape {m.shape} does not match GT shape {shape}.")
+    print(f"[DEBUG] Loaded mask, valid pixels = {(m>0).sum()} / {m.size}")
     return m > 0
 
 
 def fit_affine_est_to_gt(est_mm, gt_mm, mask):
-    """
-    Solve gt ~ a*est + b in least squares sense on masked pixels.
-    Returns: est_aligned, a, b
-    """
     est_v = est_mm[mask].reshape(-1, 1)
     gt_v  = gt_mm[mask].reshape(-1, 1)
     X = np.hstack([est_v, np.ones_like(est_v)])  # [est, 1]
     coef = np.linalg.lstsq(X, gt_v, rcond=None)[0].ravel()
     a, b = float(coef[0]), float(coef[1])
     est_aligned = a * est_mm + b
+    print(f"[DEBUG] Affine fit: a={a:.6f}, b={b:.2f}, est_aligned range=({est_aligned.min():.2f}, {est_aligned.max():.2f}) mm")
     return est_aligned, a, b
 
 
@@ -70,12 +73,10 @@ def norm01_for_viz(x, mask, p_lo=2, p_hi=98, lo_hi=None):
     v = x[np.isfinite(x)]
     if v.size == 0:
         return np.zeros_like(x, dtype=np.uint8)
-
     if lo_hi is None:
         lo, hi = np.percentile(v, p_lo), np.percentile(v, p_hi)
     else:
         lo, hi = lo_hi
-
     if hi <= lo:
         hi = lo + 1e-6
     y = (x - lo) / (hi - lo)
@@ -84,7 +85,6 @@ def norm01_for_viz(x, mask, p_lo=2, p_hi=98, lo_hi=None):
 
 
 def save_with_colorbar(path, img_mm, mask, vmin, vmax, cmap="viridis", title=""):
-    """Save a depth map with a shared colormap and a colorbar."""
     plt.figure()
     mimg = img_mm.copy().astype(float)
     mimg[~mask] = np.nan
@@ -100,54 +100,44 @@ def save_with_colorbar(path, img_mm, mask, vmin, vmax, cmap="viridis", title="")
 def save_artifacts(out_dir, gt_mm, est_mm_aligned, mask, viz_cmap="viridis", p_lo=2, p_hi=98):
     os.makedirs(out_dir, exist_ok=True)
 
-    # Absolute error (in mm)
     abs_err = np.full_like(gt_mm, np.nan, dtype=np.float32)
     abs_err[mask] = np.abs(est_mm_aligned - gt_mm)[mask]
+    print(f"[DEBUG] Error stats: mean={np.nanmean(abs_err):.2f} mm, "
+          f"95%={np.nanpercentile(abs_err,95):.2f} mm, max={np.nanmax(abs_err):.2f} mm")
 
-    # Error heatmap (normalize to 95th percentile)
     valid = abs_err[np.isfinite(abs_err)]
     scale = max(np.percentile(valid, 95), 1e-6) if valid.size > 0 else 1.0
     vis = np.clip(np.nan_to_num(abs_err, nan=0.0) / scale, 0, 1)
     err_u8 = (vis * 255).astype(np.uint8)
     cv2.imwrite(os.path.join(out_dir, "error_mm_abs.png"), err_u8)
 
-    # Shared display range from GT (percentiles)
     v_gt = gt_mm[mask]
     lo = np.percentile(v_gt, p_lo)
     hi = np.percentile(v_gt, p_hi)
-    lo_hi = (lo, hi)
-
-    # Save grayscale normalized (legacy panel, consistent lo/hi)
-    gt_u8  = norm01_for_viz(gt_mm,          mask, lo_hi=lo_hi)
-    est_u8 = norm01_for_viz(est_mm_aligned, mask, lo_hi=lo_hi)
+    gt_u8  = norm01_for_viz(gt_mm,          mask, lo_hi=(lo,hi))
+    est_u8 = norm01_for_viz(est_mm_aligned, mask, lo_hi=(lo,hi))
     cv2.imwrite(os.path.join(out_dir, "gt_mm_norm.png"), gt_u8)
     cv2.imwrite(os.path.join(out_dir, "est_mm_aligned_norm.png"), est_u8)
 
-    # Side-by-side grayscale panel
     h = gt_u8.shape[0]
     bar = np.full((h, 8), 255, np.uint8)
     panel = np.hstack([gt_u8, bar, est_u8, bar, err_u8])
     cv2.imwrite(os.path.join(out_dir, "compare_gt_est_err.png"), panel)
 
-    save_with_colorbar(
-        os.path.join(out_dir, "gt_mm_norm_cb.png"),
-        gt_mm, mask, vmin=lo, vmax=hi, cmap=viz_cmap, title="GT depth (mm)"
-    )
-    save_with_colorbar(
-        os.path.join(out_dir, "est_mm_aligned_norm_cb.png"),
-        est_mm_aligned, mask, vmin=lo, vmax=hi, cmap=viz_cmap, title="Estimated depth aligned (mm)"
-    )
+    save_with_colorbar(os.path.join(out_dir, "gt_mm_norm_cb.png"),
+        gt_mm, mask, vmin=lo, vmax=hi, cmap=viz_cmap, title="GT depth (mm)")
+    save_with_colorbar(os.path.join(out_dir, "est_mm_aligned_norm_cb.png"),
+        est_mm_aligned, mask, vmin=lo, vmax=hi, cmap=viz_cmap, title="Estimated depth aligned (mm)")
 
 
 def main():
     ap = argparse.ArgumentParser(description="Evaluate integrated depth (z_pix.npy) against GT depth.png")
-    ap.add_argument("--path", "-p", required=True, help="Dataset folder, e.g. data/Fig8_wallrelief")
-    ap.add_argument("--viz_cmap", default="viridis", help="Matplotlib colormap name (e.g., viridis, viridis_r, plasma)")
-    ap.add_argument("--p_lo", type=float, default=2.0, help="Lower percentile for display range (shared)")
-    ap.add_argument("--p_hi", type=float, default=98.0, help="Upper percentile for display range (shared)")
+    ap.add_argument("--path", "-p", required=True)
+    ap.add_argument("--viz_cmap", default="viridis")
+    ap.add_argument("--p_lo", type=float, default=2.0)
+    ap.add_argument("--p_hi", type=float, default=98.0)
     args = ap.parse_args()
 
-    # Output dir
     out_dir = os.path.join(args.path, "eval_results")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -159,18 +149,15 @@ def main():
     mask = load_mask(args.path, gt_mm.shape)
     valid = mask & np.isfinite(gt_mm) & np.isfinite(est_mm)
 
-    # Fit affine transform (fixes sign, scale, average)
     est_mm_aligned, a_scale, b_offset = fit_affine_est_to_gt(est_mm, gt_mm, valid)
     flipped = (a_scale < 0)
 
-    # Metrics
     diff    = (est_mm_aligned - gt_mm)[valid]
     mae_mm  = float(np.mean(np.abs(diff)))
     rmse_mm = float(np.sqrt(np.mean(diff**2)))
     mae_px  = mae_mm / MM_PER_PIXEL
     rmse_px = rmse_mm / MM_PER_PIXEL
 
-    # Console summary
     print("=== Evaluation (GT vs Integrated Depth) ===")
     print(f"GT path              : {gt_path}")
     print(f"Estimate path        : {z_path}")
@@ -181,15 +168,20 @@ def main():
     print(f"MAE                  : {mae_mm:.6f} mm   ({mae_px:.6f} px)")
     print(f"RMSE                 : {rmse_mm:.6f} mm  ({rmse_px:.6f} px)")
     print(f"Valid pixels         : {int(valid.sum())} / {gt_mm.size}")
+    if valid.sum() > 0:
+        center = (gt_mm.shape[0]//2, gt_mm.shape[1]//2)
+        print(f"[DEBUG] Center pixel GT={gt_mm[center]:.2f} mm, EST_aligned={est_mm_aligned[center]:.2f} mm")
 
-    # Save images (grayscale panel + colorbar images)
-    save_artifacts(out_dir, gt_mm, est_mm_aligned, valid, viz_cmap=args.viz_cmap, p_lo=args.p_lo, p_hi=args.p_hi)
+    save_artifacts(out_dir, gt_mm, est_mm_aligned, valid,
+                   viz_cmap=args.viz_cmap, p_lo=args.p_lo, p_hi=args.p_hi)
 
-    # Save CSV metrics
     csv_path = os.path.join(out_dir, "depth_eval_metrics.csv")
     with open(csv_path, "w") as f:
-        f.write("gt_path,z_path,mm_per_gt_unit,mm_per_pixel,a_scale,b_offset,mae_mm,rmse_mm,mae_px,rmse_px,valid_px,total_px\n")
-        f.write(f"{gt_path},{z_path},{MM_PER_GT_UNIT},{MM_PER_PIXEL},{a_scale:.6f},{b_offset:.6f},{mae_mm:.6f},{rmse_mm:.6f},{mae_px:.6f},{rmse_px:.6f},{int(valid.sum())},{gt_mm.size}\n")
+        f.write("gt_path,z_path,mm_per_gt_unit,mm_per_pixel,a_scale,b_offset,"
+                "mae_mm,rmse_mm,mae_px,rmse_px,valid_px,total_px\n")
+        f.write(f"{gt_path},{z_path},{MM_PER_GT_UNIT},{MM_PER_PIXEL},"
+                f"{a_scale:.6f},{b_offset:.6f},{mae_mm:.6f},{rmse_mm:.6f},"
+                f"{mae_px:.6f},{rmse_px:.6f},{int(valid.sum())},{gt_mm.size}\n")
 
     print(f"Results saved to: {out_dir}")
 

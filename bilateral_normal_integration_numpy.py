@@ -308,9 +308,14 @@ def bilateral_normal_integration(normal_map,
     depth_map = np.ones_like(normal_mask, float) * np.nan
     depth_map[normal_mask] = z
     
-    # Save raw integrated depth in pixel units for evaluation
-    np.save(os.path.join(args.path if 'args' in globals() else arg.path, "z_pix.npy"), depth_map.astype(np.float32))
+    # Save z_pix as .npy
+    np.save(os.path.join(args.path if 'args' in globals() else arg.path, "z_pix.npy"),
+            depth_map.astype(np.float32))
 
+    # Save z_pix as an image (normalized grayscale for preview)
+    z_norm = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX)
+    cv2.imwrite(os.path.join(args.path if 'args' in globals() else arg.path, "z_pix.png"),
+                z_norm.astype(np.uint8))
 
     if K is not None:  # perspective
         depth_map = np.exp(depth_map)
