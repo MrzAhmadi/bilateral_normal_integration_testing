@@ -64,23 +64,6 @@ Produced after changes in [commit 8e735c6](https://github.com/MrzAhmadi/bilatera
 ---
 
 ## 5. Photometric Stereo Evaluation
-
-We also tested the pipeline using **normals estimated via Photometric Stereo (PS)** instead of ground-truth normals.  
-The script [`photometric_stereo.py`](photometric_stereo.py) (located in the root of the repository) was added for this purpose.
-
-**Integrated Depth Map**  
-![Integrated Depth Map](data/Fig8_wallrelief_ps/z_pix.png)
-
-### Commands
-
-```bash
-python photometric_stereo.py   --images_dir data/Fig8_wallrelief/material_4   --lights data/Fig8_wallrelief/lights.txt   --mask data/Fig8_wallrelief/mask.png   --shadows_dir data/Fig8_wallrelief/shadows   --out_dir data/Fig8_wallrelief_ps   --copy_from data/Fig8_wallrelief
-
-python bilateral_normal_integration_numpy.py --path data/Fig8_wallrelief_ps
-
-python evaluate_depth_error.py --path data/Fig8_wallrelief_ps
-```
-
 ### Metrics (PS Normals)
 | Metric | Value (mm) | Value (px) |
 |---|---:|---:|
