@@ -85,8 +85,8 @@ Evaluation was done with `evaluate_depth_error.py`.
 
 | Metric | Value (mm) | Value (px) |
 |--------|------------|------------|
-| MAE    | 58.735207  | 7.518106   |
-| RMSE   | 71.137878  | 9.113979  |
+| MAE    | 54.952358  | 7.03390   |
+| RMSE   | 66.155998  | 8.467968  |
 
 ---
 
@@ -120,12 +120,14 @@ python evaluate_depth_error.py \
 
 # Step 3: Run Photometric Stereo
 python photometric_stereo.py \
-    --images_dir data/Fig8_wallrelief/material_4 \
-    --lights data/Fig8_wallrelief/lights.txt \
-    --mask data/Fig8_wallrelief/mask.png \
-    --shadows_dir data/Fig8_wallrelief/shadows \
-    --out_dir data/Fig8_wallrelief_ps \
-    --copy_from data/Fig8_wallrelief
+  --images_dir data/Fig8_wallrelief/material_4 \
+  --lights     data/Fig8_wallrelief/lights.txt \
+  --mask       data/Fig8_wallrelief/mask.png \
+  --shadows_dir data/Fig8_wallrelief/shadows \
+  --shadow_mode per_image --shadow_pct 20 \
+  --out_dir    data/Fig8_wallrelief_ps \
+  --copy_from  data/Fig8_wallrelief \
+  --save_shadow_debug --save_fc_prior
 
 # Step 4a: Depth integration (bilateral)
 python run_ps_with_fc_prior.py \
@@ -137,11 +139,8 @@ python run_ps_with_fc_prior.py \
 
 # Step 4b: (Alternative) Depth integration with FC prior
 python run_ps_with_fc_prior.py \
-    --path data/Fig8_wallrelief_ps \
-    --k 3 \
-    --iter 300 \
-    --tol 1e-6 \
-    --lambda1 0.1
+  --path data/Fig8_wallrelief_ps \
+  --k 3.0 --iter 300 --tol 1e-6 --lambda1 0.1945
 
 # Step 5: Evaluate depth result
 python evaluate_depth_error.py \
