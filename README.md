@@ -98,13 +98,7 @@ Evaluation was done with `evaluate_depth_error.py`.
 
 ---
 
-## 6. Check lights normalization
-```bash
-python3 -c "import numpy as np; L=np.loadtxt('lights.txt'); norms=np.linalg.norm(L, axis=1); print('Mean norm:', np.mean(norms), 'Should be close to 1')"
-Mean norm: 0.999981787491417 Should be close to 1
-```
-
-## 7. Reproducibility
+## 6. Reproducibility
 
 ```bash
 # --- Step 1: Run integration to generate z_pix.npy ---
@@ -129,15 +123,7 @@ python photometric_stereo.py \
   --copy_from  data/Fig8_wallrelief \
   --save_shadow_debug --save_fc_prior
 
-# Step 4a: Depth integration (bilateral)
-python run_ps_with_fc_prior.py \
-  --path data/Fig8_wallrelief_ps \
-  --k 3.0 \
-  --iter 300 \
-  --tol 1e-6 \
-  --lambda1 0.3
-
-# Step 4b: (Alternative) Depth integration with FC prior
+# Step 4: Depth integration with FC prior
 python run_ps_with_fc_prior.py \
   --path data/Fig8_wallrelief_ps \
   --k 3.0 --iter 300 --tol 1e-6 --lambda1 0.1945

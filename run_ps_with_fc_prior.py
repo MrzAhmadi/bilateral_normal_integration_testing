@@ -1,4 +1,3 @@
-# run_ps_with_fc_prior.py
 import os
 import argparse
 import numpy as np
