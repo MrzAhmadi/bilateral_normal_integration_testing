@@ -7,7 +7,30 @@ import cv2
 from bilateral_normal_integration_numpy_ps import (
     load_ps_inputs,
     bilateral_normal_integration,
+    normals_from_pq,  # for sanity logs only
 )
+
+def _rng(a, m=None):
+    if m is not None:
+        a = a[m]
+    a = a[np.isfinite(a)]
+    if a.size == 0:
+        return float("nan"), float("nan")
+    return float(a.min()), float(a.max())
+
+def _mean(a, m=None):
+    if m is not None:
+        a = a[m]
+    a = a[np.isfinite(a)]
+    return float(a.mean()) if a.size else float("nan")
+
+def _corr(a, b, m):
+    a = a[m]; b = b[m]
+    a = a[np.isfinite(a) & np.isfinite(b)]
+    b = b[np.isfinite(a) & np.isfinite(b)]
+    if a.size < 10:
+        return float("nan")
+    return float(np.corrcoef(a.ravel(), b.ravel())[0, 1])
 
 def frankot_chellappa(p, q, mask):
     """Integrate gradients (p=dz/dx, q=dz/dy) to depth using Frankot–Chellappa."""
@@ -57,16 +80,51 @@ def main():
     q = np.load(q_path).astype(np.float32)
     mask = (cv2.imread(m_path, cv2.IMREAD_GRAYSCALE) > 0)
 
+    # ---- Logs: p/q stats
+    print("[LOG] p/q stats:")
+    print(f"      p mean={_mean(p, mask):.6f}, range={_rng(p, mask)}")
+    print(f"      q mean={_mean(q, mask):.6f}, range={_rng(q, mask)}")
+
+    # ---- Reconstruct normals from p/q for sanity (expects p=-nx/nz, q=-ny/nz)
+    nx_pq, ny_pq, nz_pq = normals_from_pq(p, q)
+    frac_nz_neg_pq = float((nz_pq[mask] < 0).mean())
+    print("[LOG] normals from p/q (sanity):")
+    print(f"      mean(nz)={_mean(nz_pq, mask):.6f}, frac(nz<0)={frac_nz_neg_pq:.4f}")
+    print(f"      nx range={_rng(nx_pq, mask)}, ny range={_rng(ny_pq, mask)}, nz range={_rng(nz_pq, mask)}")
+
     # 2) FC prior
     print("[INFO] Computing FC prior from p/q...")
     z_fc = frankot_chellappa(p, q, mask)
     np.save(os.path.join(root, "z_fc.npy"), z_fc)
     z_fc_vis = cv2.normalize(z_fc, None, 0, 255, cv2.NORM_MINMAX)
     cv2.imwrite(os.path.join(root, "z_fc.png"), z_fc_vis.astype(np.uint8))
-    print("[OK] Saved z_fc.npy and z_fc.png")
+    zfc_rng = _rng(z_fc, mask)
+    print(f"[OK] Saved z_fc.npy and z_fc.png  |  z_fc range (masked) = {zfc_rng}")
 
     # 3) Load normals/mask the same way your BiNI-PS script does
-    normal_map, mask_bini, _ = load_ps_inputs(root)
+    normal_map, mask_bini, used_pq = load_ps_inputs(root)
+
+    # ---- Logs: normal_map stats
+    nx_png = normal_map[..., 0]
+    ny_png = normal_map[..., 1]
+    nz_png = normal_map[..., 2]
+    print("[LOG] normal_map (loaded) stats:")
+    print(f"      mean(nz)={_mean(nz_png, mask_bini):.6f}, frac(nz<0)={float((nz_png[mask_bini] < 0).mean()):.4f}")
+    print(f"      nx range={_rng(nx_png, mask_bini)}, ny range={_rng(ny_png, mask_bini)}, nz range={_rng(nz_png, mask_bini)}")
+
+    # ---- Compare normals-from-pq vs normal_map (when both available)
+    if used_pq:
+        # Build a full image of normals-from-pq for correlation on the mask
+        nx_img = np.zeros_like(nx_png); ny_img = np.zeros_like(ny_png); nz_img = np.zeros_like(nz_png)
+        nx_img[mask] = nx_pq[mask]
+        ny_img[mask] = ny_pq[mask]
+        nz_img[mask] = nz_pq[mask]
+
+        corr_nx = _corr(nx_img, nx_png, mask_bini)
+        corr_ny = _corr(ny_img, ny_png, mask_bini)
+        corr_nz = _corr(nz_img, nz_png, mask_bini)
+        print("[LOG] correlation normals(pq) vs normal_map.png on mask:")
+        print(f"      corr(nx)={corr_nx:.4f}, corr(ny)={corr_ny:.4f}, corr(nz)={corr_nz:.4f}")
 
     # Optionally load intrinsics if present
     K_path = os.path.join(root, "K.txt")
@@ -78,16 +136,24 @@ def main():
         normal_map=normal_map,
         normal_mask=mask_bini,
         k=args.k,
-        depth_map=z_fc,          # << prior
+        depth_map=z_fc,          # prior (in pixel units)
         depth_mask=mask,         # valid prior region
-        lambda1=args.lambda1,    # weakly trust the prior
+        lambda1=args.lambda1,    # weight for the prior
         K=K,
         max_iter=args.iter,
         tol=args.tol,
         save_path=root           # saves z_pix.npy and z_pix.png
     )
 
-    # 5) Save extras (mesh, energies, wu/wv visualizations)
+    # 5) Post BiNI logs and saves
+    z = depth_map[mask_bini]
+    print("[LOG] BiNI output z (pixel units):")
+    print(f"      mean={_mean(z):.6f}, range=({_rng(z)[0]:.2f}, {_rng(z)[1]:.2f})")
+    if np.isfinite(z).any():
+        q25, q50, q75 = np.nanpercentile(z, [25, 50, 75])
+        print(f"      quartiles: 25%={q25:.2f}, 50%={q50:.2f}, 75%={q75:.2f}")
+
+    # Save extras (mesh, energies, wu/wv visualizations)
     np.save(os.path.join(root, "energy_with_prior.npy"), np.array(energy_list, dtype=np.float64))
     surface.save(os.path.join(root, f"mesh_k_{args.k}_prior.ply"), binary=False)
 

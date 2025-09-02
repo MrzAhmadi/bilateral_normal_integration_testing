@@ -1,8 +1,15 @@
 """
 Bilateral Normal Integration (BiNI) — PS-type
 Prefers p/q from Photometric Stereo; reconstructs normals from p,q if available.
+
+CONVENTIONS (consistent everywhere in this script):
+- Image axes: x → right, y → down, z → toward camera
+- Normal map encoding (PNG & in-memory): RGB = (nx, ny, nz) in [-1, 1]
+  -> Blue channel encodes n_z (perpendicular to camera)
+- Gradients (orthographic): p = ∂z/∂x = -nx/nz,  q = ∂z/∂y = -ny/nz
 """
-__author__ = "Xu Cao (orig) + small PS adapter"
+
+__author__ = "Xu Cao (orig) + PS adapter"
 __version__ = "2.0-ps"
 
 from scipy.sparse import spdiags, csr_matrix, vstack
@@ -111,24 +118,14 @@ def normals_from_pq(p, q):
     ny = -q * nz
     return nx, ny, nz
 
-def normal_png_from_camera_normals(nx, ny, nz):
-    """
-    Convert camera-frame normals (nx,ny,nz) to the repo's normal-map encoding:
-        normal_map[...,0] = ny
-        normal_map[...,1] = nx
-        normal_map[...,2] = -nz
-    (float in [-1,1])
-    """
-    nm = np.stack([ny, nx, -nz], axis=-1).astype(np.float32)
-    return nm
-
 def load_ps_inputs(path):
     """
     Prefer p.npy/q.npy; fall back to normal_map.png.
+
     Returns:
-        normal_map_float (H,W,3) in repo encoding ([-1,1]),
-        mask (bool),
-        used_pq (bool)
+        normal_map : float32 (H,W,3) in [-1,1], **RGB=(nx,ny,nz)**
+        mask       : bool (H,W)
+        used_pq    : bool
     """
     p_path = os.path.join(path, "p.npy")
     q_path = os.path.join(path, "q.npy")
@@ -147,24 +144,58 @@ def load_ps_inputs(path):
             q = np.where(mask, q, 0.0)
 
         nx, ny, nz = normals_from_pq(p, q)
-        normal_map = normal_png_from_camera_normals(nx, ny, nz)
+        normal_map = np.stack([nx, ny, nz], axis=-1).astype(np.float32)  # RGB=(nx,ny,nz)
 
-        # Optional debug
-        print(f"[DEBUG] p range {np.nanmin(p):.3f}..{np.nanmax(p):.3f}, "
-              f"q range {np.nanmin(q):.3f}..{np.nanmax(q):.3f}")
-        return normal_map, (mask if mask is not None else np.ones(p.shape, bool)), True
+        # Sanity logs
+        with np.errstate(invalid='ignore'):
+            nz_mean = float(nz[mask].mean()) if mask is not None else float(np.nanmean(nz))
+        print(f"[DEBUG] Reconstructed normals from p/q: "
+              f"mean(nz)={nz_mean:.6f}, "
+              f"nx∈[{np.nanmin(nx):.3f},{np.nanmax(nx):.3f}], "
+              f"ny∈[{np.nanmin(ny):.3f},{np.nanmax(ny):.3f}], "
+              f"nz∈[{np.nanmin(nz):.3f},{np.nanmax(nz):.3f}]")
 
-    # fallback: load normal_map.png (RGB in dataset encoding)
+        if mask is None:
+            mask = np.ones(p.shape, bool)
+        return normal_map, mask, True
+
+    # --- Fallback: read normal_map.png encoded as RGB=(nx,ny,nz) in [0,255]/[0,65535] ---
     print("[INFO] p/q not found. Using normal_map.png")
-    nm = cv2.cvtColor(cv2.imread(os.path.join(path, "normal_map.png"), cv2.IMREAD_UNCHANGED),
-                      cv2.COLOR_RGB2BGR)
-    if nm.dtype is np.dtype(np.uint16):
-        nm = nm/65535.0 * 2 - 1
+    nm_path = os.path.join(path, "normal_map.png")
+    img = cv2.imread(nm_path, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise FileNotFoundError(f"Cannot read {nm_path}")
+
+    # drop alpha if present, ensure 3-ch
+    if img.ndim == 2:
+        raise ValueError(f"{nm_path} is grayscale; expected 3 channels.")
+    if img.shape[2] == 4:
+        img = img[:, :, :3]
+
+    # BGR -> RGB
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    # to [0,1]
+    if img_rgb.dtype == np.uint16:
+        nm01 = img_rgb.astype(np.float32) / 65535.0
     else:
-        nm = nm/255.0 * 2 - 1
+        nm01 = img_rgb.astype(np.float32) / 255.0
+
+    normal_map = (nm01 * 2.0 - 1.0).astype(np.float32)  # RGB=(nx,ny,nz)
+
     if mask is None:
-        mask = np.ones(nm.shape[:2], bool)
-    return nm.astype(np.float32), mask, False
+        mask = np.ones(normal_map.shape[:2], bool)
+
+    # Sanity logs
+    nxs, nys, nzs = [normal_map[...,i] for i in range(3)]
+    with np.errstate(invalid='ignore'):
+        nz_mean = float(nzs[mask].mean()) if mask is not None else float(np.nanmean(nzs))
+    print(f"[DEBUG] Loaded normals from PNG: "
+          f"mean(nz)={nz_mean:.6f}, "
+          f"nx∈[{np.nanmin(nxs):.3f},{np.nanmax(nxs):.3f}], "
+          f"ny∈[{np.nanmin(nys):.3f},{np.nanmax(nys):.3f}], "
+          f"nz∈[{np.nanmin(nzs):.3f},{np.nanmax(nzs):.3f}]")
+    return normal_map, mask, False
 
 # -------------------- BiNI core --------------------
 
@@ -176,10 +207,23 @@ def bilateral_normal_integration(normal_map, normal_mask, k=2, depth_map=None, d
     print(f"Running bilateral normal integration with k={k} in the {projection} case.\n"
           f"The number of normal vectors is {num_normals}.")
 
-    # Transform from normal-map encoding -> camera normals
-    nx = normal_map[normal_mask, 1]
-    ny = normal_map[normal_mask, 0]
-    nz = - normal_map[normal_mask, 2]
+    # Transform from normal-map encoding -> camera normals (RGB = nx, ny, nz)
+    nx = normal_map[normal_mask, 0]
+    ny = normal_map[normal_mask, 1]
+    nz = normal_map[normal_mask, 2]
+
+    # Sanity logs on input normals to BiNI
+    def _rng(x): 
+        with np.errstate(invalid='ignore'):
+            return float(np.nanmin(x)), float(np.nanmax(x))
+    with np.errstate(invalid='ignore'):
+        nz_mean = float(nz.mean()) if nz.size else float('nan')
+        frac_back = float((nz < 0).mean())
+    print(f"[DEBUG] BiNI input normals: mean(nz)={nz_mean:.6f}, "
+          f"nx∈[{_rng(nx)[0]:.3f},{_rng(nx)[1]:.3f}], "
+          f"ny∈[{_rng(ny)[0]:.3f},{_rng(ny)[1]:.3f}], "
+          f"nz∈[{_rng(nz)[0]:.3f},{_rng(nz)[1]:.3f}], "
+          f"fraction(nz<0)={frac_back:.4f}")
 
     if K is not None:
         img_height, img_width = normal_mask.shape[:2]
@@ -201,11 +245,12 @@ def bilateral_normal_integration(normal_map, normal_mask, k=2, depth_map=None, d
 
     # linear system
     A = vstack((A1, A2, A3, A4))
-    b = np.concatenate((-nx, -nx, -ny, -ny))
+    # NOTE: with p = -nx/nz, q = -ny/nz, the correct RHS uses +nx, +ny here.
+    b = np.concatenate((nx, nx, ny, ny))
 
     # optimize
     W = spdiags(0.5 * np.ones(4*num_normals), 0, 4*num_normals, 4*num_normals, format="csr")
-    z = np.zeros(np.sum(normal_mask))
+    z = np.zeros(np.sum(normal_mask), dtype=np.float32)
     energy = (A @ z - b).T @ W @ (A @ z - b)
 
     tic = time.time()
@@ -237,7 +282,7 @@ def bilateral_normal_integration(normal_map, normal_mask, k=2, depth_map=None, d
         energy_old = energy
         energy = (A @ z - b).T @ W @ (A @ z - b)
         energy_list.append(energy)
-        relative_energy = np.abs(energy - energy_old) / energy_old
+        relative_energy = np.abs(energy - energy_old) / max(abs(energy_old), 1e-12)
         pbar.set_description(f"step {i + 1}/{max_iter} energy: {energy:.3f} relative energy: {relative_energy:.3e}")
         if relative_energy < tol:
             break
@@ -247,11 +292,27 @@ def bilateral_normal_integration(normal_map, normal_mask, k=2, depth_map=None, d
     depth_map_out = np.ones_like(normal_mask, float) * np.nan
     depth_map_out[normal_mask] = z
 
+    # Debug range of z before saving
+    z_valid = z[np.isfinite(z)]
+    if z_valid.size:
+        print(f"[DEBUG] z (pix-units) range before save: [{float(z_valid.min()):.2f}, {float(z_valid.max()):.2f}]")
+
     # save z_pix
     if save_path is not None:
         np.save(os.path.join(save_path, "z_pix.npy"), depth_map_out.astype(np.float32))
         z_norm = cv2.normalize(depth_map_out, None, 0, 255, cv2.NORM_MINMAX)
         cv2.imwrite(os.path.join(save_path, "z_pix.png"), z_norm.astype(np.uint8))
+        print(f"[OK] Saved z_pix.npy and z_pix.png to {save_path}")
+
+        # also save a small normals preview for sanity (blue = nz)
+        nm = np.zeros((*normal_mask.shape, 3), dtype=np.float32)
+        nm[normal_mask, 0] = nx
+        nm[normal_mask, 1] = ny
+        nm[normal_mask, 2] = nz
+        nm_vis = np.clip((nm * 0.5 + 0.5) * 255.0, 0, 255).astype(np.uint8)  # RGB
+        nm_vis_bgr = nm_vis[..., ::-1]  # RGB->BGR for cv2
+        cv2.imwrite(os.path.join(save_path, "normals_preview.png"), nm_vis_bgr)
+        print(f"[OK] Saved normals_preview.png (RGB=(nx,ny,nz); blue=nz)")
 
     # surface
     if K is not None:
@@ -261,7 +322,9 @@ def bilateral_normal_integration(normal_map, normal_mask, k=2, depth_map=None, d
         vertices = map_depth_map_to_point_clouds(depth_map_out, normal_mask, K=None, step_size=step_size)
 
     facets = construct_facets_from(normal_mask)
+    # NOTE: with RGB=(nx,ny,nz) and nz>0 on average, this should NOT trigger.
     if normal_map[:, :, -1].mean() < 0:
+        print("[HINT] mean(nz) < 0 on normal_map; flipping facet order for correct orientation.")
         facets = facets[:, [0, 1, 4, 3, 2]]
     surface = pv.PolyData(vertices, facets)
 
@@ -296,10 +359,15 @@ if __name__ == '__main__':
     else:
         K = None
 
+    # Quick top-level sanity on normal_map before passing to BiNI
+    nz_mean_all = float(normal_map[...,2][mask].mean())
+    frac_nz_neg = float((normal_map[...,2][mask] < 0).mean())
+    print(f"[SUMMARY] normal_map: mean(nz within mask)={nz_mean_all:.6f}, fraction(nz<0)={frac_nz_neg:.4f}, used_pq={used_pq}")
+
     # Run BiNI
     depth_map, surface, wu_map, wv_map, energy_list = bilateral_normal_integration(
         normal_map=normal_map, normal_mask=mask, k=args.k, K=K,
-        max_iter=args.iter, tol=args.tol, save_path=args.path
+        max_iter=args.i, tol=args.t, save_path=args.path
     )
 
     # Save artifacts

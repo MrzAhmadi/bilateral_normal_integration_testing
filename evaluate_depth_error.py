@@ -150,6 +150,12 @@ def main():
     valid = mask & np.isfinite(gt_mm) & np.isfinite(est_mm)
 
     est_mm_aligned, a_scale, b_offset = fit_affine_est_to_gt(est_mm, gt_mm, valid)
+
+    if a_scale < 0:
+        print("[INFO] GT depth convention is inverted relative to estimate. Flipping estimate for consistency.")
+        est_mm = -est_mm
+        est_mm_aligned, a_scale, b_offset = fit_affine_est_to_gt(est_mm, gt_mm, valid)
+
     flipped = (a_scale < 0)
 
     diff    = (est_mm_aligned - gt_mm)[valid]
