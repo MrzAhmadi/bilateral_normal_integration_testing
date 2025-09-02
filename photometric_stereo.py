@@ -81,10 +81,13 @@ def maybe_fix_shadow_polarity(Wshadow):
 
 def save_normals_png_dataset(normals, out_path_png):
     n = np.clip(normals, -1.0, 1.0)
-    r = ((n[..., 1] + 1.0) * 0.5 * 255.0).astype(np.uint8)
-    g = ((n[..., 0] + 1.0) * 0.5 * 255.0).astype(np.uint8)
-    b = ((-n[..., 2] + 1.0) * 0.5 * 255.0).astype(np.uint8)
-    n_img = np.stack([r, g, b], axis=-1)
+
+    # R -> n_x, G -> n_y, B -> n_z
+    r = ((n[..., 0] + 1.0) * 0.5 * 255.0).astype(np.uint8)
+    g = ((n[..., 1] + 1.0) * 0.5 * 255.0).astype(np.uint8)
+    b = ((n[..., 2] + 1.0) * 0.5 * 255.0).astype(np.uint8)
+
+    n_img = np.stack([r, g, b], axis=-1)  # RGB order
     cv2.imwrite(out_path_png, cv2.cvtColor(n_img, cv2.COLOR_RGB2BGR))
 
 def viz_percentile(img, mask, lo=2, hi=98):
